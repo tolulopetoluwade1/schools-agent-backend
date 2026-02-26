@@ -13,6 +13,30 @@ const allowedOrigins = [
   "https://schools-agent-admin-dashboard.vercel.app",
 ];
 
+const FAQS = [
+  {
+    keywords: ["fees", "tuition", "school fees", "how much"],
+    answer: "School fees depend on the class. Please tell me your child’s class (e.g., Nursery 2, Primary 3).",
+  },
+  {
+    keywords: ["address", "location", "where", "located"],
+    answer: "The school address will be shared after admission begins. Please tell me your child's full name to continue.",
+  },
+  {
+    keywords: ["uniform"],
+    answer: "Yes, the school uses uniform. Details will be shared after admission begins.",
+  },
+  {
+    keywords: ["resumption", "resume", "resumption date"],
+    answer: "Resumption date varies by term. Admin will confirm after admission begins.",
+  },
+];
+
+function matchFaq(text) {
+  const t = String(text || "").toLowerCase();
+  return FAQS.find(f => f.keywords.some(k => t.includes(k)));
+}
+
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -259,6 +283,23 @@ app.post("/webhooks/inbound", inboundWebhookLimiter, async (req, res) => {
         message: "channel, from, schoolId, and text are required",
       });
     }
+    // ✅ ADD THIS RIGHT HERE
+const faq = matchFaq(text);
+const looksLikeQuestion = text.trim().endsWith("?") || Boolean(faq);
+
+if (looksLikeQuestion) {
+  const replyText = faq
+    ? faq.answer
+    : "I’m not sure—please contact the school admin.";
+
+  const continuePrompt = "To continue admission, please tell me your child's full name.";
+
+  return res.json({
+    success: true,
+    stored: true,
+    reply: `${replyText}\n\n${continuePrompt}`,
+  });
+}    
 
     const school = await School.findByPk(schoolId);
     if (!school) {
