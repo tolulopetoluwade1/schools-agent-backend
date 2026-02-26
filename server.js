@@ -7,9 +7,19 @@ const rateLimit = require("express-rate-limit");
 const { Sequelize, DataTypes } = require("sequelize");
 
 const app = express();
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://schools-agent-admin-dashboard.vercel.app",
+];
+
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   })
