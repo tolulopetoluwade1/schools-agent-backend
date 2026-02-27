@@ -12,6 +12,15 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
+      address: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      },
+
+      mapsLink: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
 
       timezone: {
         type: DataTypes.STRING,
