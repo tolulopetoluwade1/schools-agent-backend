@@ -288,10 +288,25 @@ const faq = matchFaq(text);
 const looksLikeQuestion = text.trim().endsWith("?") || Boolean(faq);
 
 if (looksLikeQuestion) {
-  const replyText = faq
-    ? faq.answer
-    : "I’m not sure—please contact the school admin.";
+ let replyText = "I’m not sure—please contact the school admin.";
 
+if (faq) {
+  // If they asked about address/location, use school data
+  const isAddressQuestion = faq.keywords.includes("address") || faq.keywords.includes("location") || faq.keywords.includes("where");
+
+  if (isAddressQuestion) {
+    const school = await School.findByPk(schoolId);
+
+    if (school && school.address) {
+      replyText = `📍 Address: ${school.address}`;
+      if (school.mapsLink) replyText += `\n🗺️ Map: ${school.mapsLink}`;
+    } else {
+      replyText = "Address is not set yet. Please contact the school admin.";
+    }
+  } else {
+    replyText = faq.answer;
+  }
+}
   const continuePrompt = "To continue admission, please tell me your child's full name.";
 
   return res.json({
