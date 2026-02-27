@@ -816,6 +816,27 @@ app.get("/health", (req, res) => {
   res.json({ success: true, status: "ok" });
 });
 
+app.patch("/admin/schools/:schoolId", requireAdminKey, async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const { address, mapsLink } = req.body;
+
+    const school = await School.findByPk(schoolId);
+    if (!school) {
+      return res.status(404).json({ success: false, message: "School not found" });
+    }
+
+    await school.update({
+      address: address ?? school.address,
+      mapsLink: mapsLink ?? school.mapsLink,
+    });
+
+    return res.json({ success: true, school });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 app.post("/setup/create-school", async (req, res) => {
   try {
     const { name } = req.body;
