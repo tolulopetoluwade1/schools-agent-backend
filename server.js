@@ -852,30 +852,6 @@ app.patch("/admin/schools/:schoolId", requireAdminKey, async (req, res) => {
   }
 });
 
-app.post("/setup/create-school", async (req, res) => {
-  try {
-    const { name } = req.body;
-
-    if (!name) {
-      return res.status(400).json({
-        success: false,
-        message: "name is required",
-      });
-    }
-
-    const school = await School.create({ name });
-
-    return res.json({
-      success: true,
-      school,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-});
 app.use((err, req, res, next) => {
   console.error("UNHANDLED ERROR:", err);
 
