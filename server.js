@@ -9,6 +9,15 @@ const OpenAI = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
 
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    llmFallbackEnabled: process.env.LLM_FALLBACK_ENABLED === "true",
+    llmTestMode: process.env.LLM_TEST_MODE === "true",
+    invoiceSendEnabled: process.env.INVOICE_SEND_ENABLED === "true"
+  });
+});
+
 const allowedOrigins = [
   "http://localhost:5173",
   "https://schools-agent-admin-dashboard.vercel.app",
