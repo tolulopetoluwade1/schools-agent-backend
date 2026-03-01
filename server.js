@@ -259,6 +259,26 @@ app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/admin/schools", requireAdminKey, async (req, res) => {
+  try {
+    const { name, address, mapsLink } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ success: false, message: "name is required" });
+    }
+
+    const school = await School.create({
+      name,
+      address: address || null,
+      mapsLink: mapsLink || null,
+    });
+
+    return res.json({ success: true, school });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 // ----------
 // Inbound webhook (parent messages)
 // ----------
