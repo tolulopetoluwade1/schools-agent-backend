@@ -5,7 +5,8 @@ const express = require("express");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { Sequelize, DataTypes } = require("sequelize");
-
+const OpenAI = require("openai");
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
 
 const allowedOrigins = [
@@ -36,7 +37,29 @@ function matchFaq(text) {
   const t = String(text || "").toLowerCase();
   return FAQS.find(f => f.keywords.some(k => t.includes(k)));
 }
+async function llmFaqAnswer({ school, question }) {
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
+  const instructions =
+    "You are a school admissions assistant for a Nigerian school. " +
+    "Answer ONLY using the SCHOOL INFO provided. " +
+    "If the answer is not in the info, say: 'I’m not sure—please contact the school admin.' " +
+    "Keep it short (1-4 lines).";
+
+  const schoolInfo = [
+    `School name: ${school?.name || ""}`,
+    `Address: ${school?.address || ""}`,
+    `Map: ${school?.mapsLink || ""}`,
+  ].join("\n");
+
+  const resp = await openai.responses.create({
+    model,
+    instructions,
+    input: `SCHOOL INFO:\n${schoolInfo}\n\nPARENT QUESTION:\n${question}`,
+  });
+
+  return (resp.output_text || "").trim() || "I’m not sure—please contact the school admin.";
+}
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -308,48 +331,57 @@ const faq = matchFaq(text);
 const looksLikeQuestion = text.trim().endsWith("?") || Boolean(faq);
 
 if (looksLikeQuestion) {
- let replyText = "I’m not sure—please contact the school admin.";
+  let replyText = "I’m not sure—please contact the school admin.";
 
-if (faq) {
-  // If they asked about address/location, use school data
-  const isAddressQuestion = faq.keywords.includes("address") || faq.keywords.includes("location") || faq.keywords.includes("where");
+  // Load school once (we need it for dynamic address + LLM context)
+  const school = await School.findByPk(schoolId);
 
-  if (isAddressQuestion) {
-    const school = await School.findByPk(schoolId);
+  if (faq) {
+    const isAddressQuestion =
+      faq.keywords.includes("address") ||
+      faq.keywords.includes("location") ||
+      faq.keywords.includes("where");
 
-    if (school && school.address) {
-      replyText = `📍 Address: ${school.address}`;
-      if (school.mapsLink) replyText += `\n🗺️ Map: ${school.mapsLink}`;
+    if (isAddressQuestion) {
+      if (school && school.address) {
+        replyText = `📍 Address: ${school.address}`;
+        if (school.mapsLink) replyText += `\n🗺️ Map: ${school.mapsLink}`;
+      } else {
+        replyText = "Address is not set yet. Please contact the school admin.";
+      }
     } else {
-      replyText = "Address is not set yet. Please contact the school admin.";
+      // keyword FAQ match
+      replyText = faq.answer;
     }
   } else {
-    replyText = faq.answer;
+    // No keyword match, but it looks like a question → call LLM
+    replyText = await llmFaqAnswer({ school, question: text });
   }
-}
-  const continuePrompt = "To continue admission, please tell me your child's full name.";
+
+  const continuePrompt =
+    "To continue admission, please tell me your child's full name.";
 
   return res.json({
     success: true,
     stored: true,
     reply: `${replyText}\n\n${continuePrompt}`,
   });
-}    
+}  
 
-    const school = await School.findByPk(schoolId);
-    if (!school) {
+    const schoolRecord = await School.findByPk(schoolId);
+    if (!schoolRecord) {
       return res.status(404).json({ success: false, message: "School not found" });
     }
 
     const [parent] = await Parent.findOrCreate({
-      where: { schoolId: school.id, phone: normalizedFrom },
-      defaults: { schoolId: school.id, phone: normalizedFrom },
+      where: { schoolId: schoolRecord.id, phone: normalizedFrom },
+      defaults: { schoolId: schoolRecord.id, phone: normalizedFrom },
     });
 
     const [conversation] = await Conversation.findOrCreate({
-      where: { schoolId: school.id, parentId: parent.id, channel },
+      where: { schoolId: schoolRecord.id, parentId: parent.id, channel },
       defaults: {
-        schoolId: school.id,
+        schoolId: schoolRecord.id,
         parentId: parent.id,
         channel,
         status: "open",
