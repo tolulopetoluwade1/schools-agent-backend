@@ -941,6 +941,7 @@ async function start() {
 // ===============================
 
 // 1) Verification (Meta calls this once when you click "Verify and Save")
+console.log("✅ META VERIFY HIT:", req.query);
 app.get("/webhook", (req, res) => {
   const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN;
 
@@ -955,6 +956,7 @@ app.get("/webhook", (req, res) => {
 });
 
 // 2) Incoming messages (Meta calls this when someone sends a WhatsApp message)
+console.log("✅ META MESSAGE HIT:", JSON.stringify(req.body, null, 2));
 app.post("/webhook", express.json(), async (req, res) => {
   try {
     // Log once so you can confirm messages are arriving
