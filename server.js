@@ -936,6 +936,72 @@ async function start() {
     await sequelize.sync({ alter: true });
     console.log("✅ Tables synced");
 
+    // ===============================
+// META WHATSAPP CLOUD WEBHOOK
+// ===============================
+
+// 1) Verification (Meta calls this once when you click "Verify and Save")
+app.get("/webhook", (req, res) => {
+  const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN;
+
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// 2) Incoming messages (Meta calls this when someone sends a WhatsApp message)
+app.post("/webhook", express.json(), async (req, res) => {
+  try {
+    // Log once so you can confirm messages are arriving
+    console.log("META WEBHOOK RAW:", JSON.stringify(req.body, null, 2));
+
+    // Extract message text + sender from Meta payload (only if it exists)
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+
+    const message = value?.messages?.[0];
+    const from = message?.from; // WhatsApp phone number (no + usually)
+    const text = message?.text?.body;
+
+    if (!from || !text) {
+      // Meta sends other events too; acknowledge anyway
+      return res.sendStatus(200);
+    }
+
+    // YOU must decide schoolId for now:
+    // simplest: one school in production → use env var
+    const schoolId = Number(process.env.DEFAULT_SCHOOL_ID || 1);
+
+    // Now call your existing inbound logic by making it a function (recommended),
+    // but for now we just hit the same code path by duplicating the same input shape.
+    // We will do the clean refactor after it works.
+
+    req.body = {
+      channel: "whatsapp",
+      from: from.startsWith("+") ? from : `+${from}`,
+      schoolId,
+      text,
+      timestamp: new Date().toISOString(),
+    };
+
+    // IMPORTANT: we need to run the same handler as /webhooks/inbound.
+    // Easiest clean way: extract your /webhooks/inbound handler into a function.
+    // For now, just respond 200 so Meta is happy:
+    console.log("META PARSED:", req.body);
+
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error("META WEBHOOK ERROR:", err);
+    return res.sendStatus(200);
+  }
+});
+
     app.listen(PORT, () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
     });
