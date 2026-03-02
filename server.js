@@ -9,6 +9,11 @@ const OpenAI = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
 
+app.use((req, res, next) => {
+  console.log("➡️ REQUEST:", req.method, req.originalUrl);
+  next();
+});
+
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
