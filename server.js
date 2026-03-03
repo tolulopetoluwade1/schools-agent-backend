@@ -9,6 +9,8 @@ const OpenAI = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
 
+app.use(express.json());
+
 async function sendWhatsAppText(to, message) {
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
   const token = process.env.META_ACCESS_TOKEN;
@@ -39,8 +41,19 @@ async function sendWhatsAppText(to, message) {
   const data = await resp.json();
   console.log("✅ META SEND RESULT:", data);
 }
+async function callInboundLogic({ channel, from, schoolId, text, timestamp }) {
+  const baseUrl = process.env.PUBLIC_BASE_URL; // your Render base URL
+  const resp = await fetch(`${baseUrl}/webhooks/inbound`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel, from, schoolId, text, timestamp }),
+  });
 
-app.use(express.json());
+  const data = await resp.json();
+  return data.reply || "No reply generated.";
+}
+
+
 
 // ===============================
 // META WHATSAPP CLOUD WEBHOOK
@@ -79,7 +92,15 @@ app.post("/webhook", async (req, res) => {
 
     console.log("✅ INCOMING TEXT:", text, "FROM:", from);
 
-    await sendWhatsAppText(from, "Hello from server ✅");
+    const replyText = await callInboundLogic({
+      channel: "whatsapp",
+      from: `+${from}`,
+      schoolId: Number(process.env.DEFAULT_SCHOOL_ID || 1),
+      text,
+      timestamp: new Date().toISOString(),
+    });
+
+    await sendWhatsAppText(from, replyText);
 
   } catch (err) {
     console.error("❌ /webhook error:", err);
