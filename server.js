@@ -228,33 +228,64 @@ function getFeeForClass(desiredClass) {
   return 40000;
 }
 
-function extractChildName(input) {
-  if (!input) return null;
+function extractChildName(rawText) {
+  if (!rawText) return null;
 
-  const text = input.trim().replace(/\s+/g, " ");
+  // Normalize
+  const t = String(rawText).trim().replace(/\s+/g, " ");
+  const lower = t.toLowerCase();
 
-  const patterns = [
-    /(?:my\s+child(?:'s)?\s+(?:full\s+name|name)\s+is)\s+(.+)$/i,
-    /(?:my\s+child\s+is)\s+(.+)$/i,
-    /(?:name\s+is)\s+(.+)$/i,
-    /^([A-Za-z]+(?:\s+[A-Za-z]+){0,3})$/
+  // If it's clearly not a name, reject it
+  const badStarts = [
+    "i need", "i want", "i would", "can you", "do you", "how", "what", "where", "when", "why"
   ];
+  if (badStarts.some(s => lower.startsWith(s))) return null;
 
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m && m[1]) {
-      let name = m[1]
-        .replace(/[0-9]/g, "")
-        .replace(/[^\w\s'-]/g, "")
-        .trim()
-        .replace(/\s+/g, " ");
+  // Remove common prefixes
+  let cleaned = t
+    .replace(/^my\s+child(?:'s)?\s+(?:full\s+name|name)\s+is\s+/i, "")
+    .replace(/^my\s+child\s+is\s+/i, "")
+    .replace(/^name\s+is\s+/i, "")
+    .trim();
 
-      const parts = name.split(" ").filter(Boolean);
-      if (parts.length >= 1 && parts.length <= 4) return name;
-    }
+  // Keep only letters, spaces, apostrophe, dash
+  cleaned = cleaned.replace(/[^a-zA-Z\s'-]/g, "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+
+  // Split words and filter stopwords
+  const stopwords = new Set([
+    "and","but","pls","please","kindly",
+    "she","he","his","her","is","was","am","are",
+    "very","shy","quiet","too","also",
+    "my","child","son","daughter","name","full"
+  ]);
+
+  const stopAt = new Set([
+    "and","but","because","honestly","pls","please","kindly",
+    "she","he","his","her","is","was","am","are"
+  ]);
+
+  const rawWords = cleaned.split(" ").map(w => w.trim()).filter(Boolean);
+
+  let words = [];
+  for (const w of rawWords) {
+    const lw = w.toLowerCase();
+    if (stopAt.has(lw)) break;
+    if (stopwords.has(lw)) continue;
+    words.push(w);
   }
 
-  return null;
+  // Allow 1 to 4 words (Toyin / Toyin Alabi / etc.)
+  if (words.length < 1) return null;
+  words = words.slice(0, 4);
+
+  // Capitalize nicely
+  const name = words
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ")
+    .trim();
+
+  return name || null;
 }
   // Remove common intro phrases
   t = t.replace(/my child'?s name is/i, "");
@@ -307,7 +338,6 @@ for (const w of rawWords) {
     .trim();
 
   return name;
-}
 
 function extractAge(rawText) {
   if (!rawText) return null;
