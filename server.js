@@ -9,6 +9,37 @@ const OpenAI = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
 
+async function sendWhatsAppText(to, message) {
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_ACCESS_TOKEN;
+
+  if (!phoneNumberId || !token) {
+    console.log("❌ Missing META_PHONE_NUMBER_ID or META_ACCESS_TOKEN");
+    return;
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to, // e.g. "2348137137336"
+    type: "text",
+    text: { body: message },
+  };
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await resp.json();
+  console.log("✅ META SEND RESULT:", data);
+}
+
 app.use(express.json());
 
 // ===============================
@@ -31,9 +62,28 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-app.post("/webhook", (req, res) => {
-  console.log("✅ META MESSAGE HIT:", JSON.stringify(req.body, null, 2));
-  return res.sendStatus(200);
+app.post("/webhook", async (req, res) => {
+  try {
+    // Immediately respond to Meta (very important)
+    res.sendStatus(200);
+
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+
+    const message = value?.messages?.[0];
+    const from = message?.from; // e.g. "2348137137336"
+    const text = message?.text?.body;
+
+    if (!from || !text) return;
+
+    console.log("✅ INCOMING TEXT:", text, "FROM:", from);
+
+    await sendWhatsAppText(from, "Hello from server ✅");
+
+  } catch (err) {
+    console.error("❌ /webhook error:", err);
+  }
 });
 
 app.use((req, res, next) => {
