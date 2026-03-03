@@ -8,7 +8,7 @@ const { Sequelize, DataTypes } = require("sequelize");
 const OpenAI = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
-app.set("trust proxy", 1);
+app.set("trust proxy", true);
 
 app.use(express.json());
 
@@ -442,10 +442,11 @@ app.post("/admin/schools", requireAdminKey, async (req, res) => {
 // Inbound webhook (parent messages)
 // ----------
 const inboundWebhookLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 60,             // 60 requests per minute per IP
+  windowMs: 60 * 1000,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false }, // ✅ stops the crash
 });
 app.post("/webhooks/inbound", inboundWebhookLimiter, async (req, res) => {
   try {
