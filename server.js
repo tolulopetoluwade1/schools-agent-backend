@@ -227,11 +227,34 @@ function getFeeForClass(desiredClass) {
   return 40000;
 }
 
-function extractChildName(rawText) {
-  if (!rawText) return null;
+function extractChildName(input) {
+  if (!input) return null;
 
-  let t = rawText.toString().trim();
+  const text = input.trim().replace(/\s+/g, " ");
 
+  const patterns = [
+    /(?:my\s+child(?:'s)?\s+(?:full\s+name|name)\s+is)\s+(.+)$/i,
+    /(?:my\s+child\s+is)\s+(.+)$/i,
+    /(?:name\s+is)\s+(.+)$/i,
+    /^([A-Za-z]+(?:\s+[A-Za-z]+){0,3})$/
+  ];
+
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m && m[1]) {
+      let name = m[1]
+        .replace(/[0-9]/g, "")
+        .replace(/[^\w\s'-]/g, "")
+        .trim()
+        .replace(/\s+/g, " ");
+
+      const parts = name.split(" ").filter(Boolean);
+      if (parts.length >= 1 && parts.length <= 4) return name;
+    }
+  }
+
+  return null;
+}
   // Remove common intro phrases
   t = t.replace(/my child'?s name is/i, "");
   t = t.replace(/my son's name is/i, "");
