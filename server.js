@@ -8,6 +8,7 @@ const { Sequelize, DataTypes } = require("sequelize");
 const OpenAI = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
+app.set("trust proxy", 1);
 
 app.use(express.json());
 
