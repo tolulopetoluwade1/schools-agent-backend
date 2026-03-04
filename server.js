@@ -231,61 +231,37 @@ function getFeeForClass(desiredClass) {
 function extractChildName(rawText) {
   if (!rawText) return null;
 
-  // Normalize
-  const t = String(rawText).trim().replace(/\s+/g, " ");
-  const lower = t.toLowerCase();
+  const text = String(rawText).trim().replace(/\s+/g, " ");
+  const lower = text.toLowerCase();
 
-  // If it's clearly not a name, reject it
+  // Ignore obvious sentences/questions
   const badStarts = [
-    "i need", "i want", "i would", "can you", "do you", "how", "what", "where", "when", "why"
+    "i need","i want","i would","can you","do you",
+    "how","what","where","when","why"
   ];
+
   if (badStarts.some(s => lower.startsWith(s))) return null;
 
-  // Remove common prefixes
-  let cleaned = t
+  // Remove common prefixes parents use
+  let cleaned = text
     .replace(/^my\s+child(?:'s)?\s+(?:full\s+name|name)\s+is\s+/i, "")
     .replace(/^my\s+child\s+is\s+/i, "")
     .replace(/^name\s+is\s+/i, "")
     .trim();
 
-  // Keep only letters, spaces, apostrophe, dash
-  cleaned = cleaned.replace(/[^a-zA-Z\s'-]/g, "").replace(/\s+/g, " ").trim();
+  cleaned = cleaned.replace(/[^a-zA-Z\s'-]/g, " ").replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
 
-  // Split words and filter stopwords
-  const stopwords = new Set([
-    "and","but","pls","please","kindly",
-    "she","he","his","her","is","was","am","are",
-    "very","shy","quiet","too","also",
-    "my","child","son","daughter","name","full"
-  ]);
+  const words = cleaned.split(" ").filter(Boolean);
 
-  const stopAt = new Set([
-    "and","but","because","honestly","pls","please","kindly",
-    "she","he","his","her","is","was","am","are"
-  ]);
+  if (words.length === 0) return null;
 
-  const rawWords = cleaned.split(" ").map(w => w.trim()).filter(Boolean);
-
-  let words = [];
-  for (const w of rawWords) {
-    const lw = w.toLowerCase();
-    if (stopAt.has(lw)) break;
-    if (stopwords.has(lw)) continue;
-    words.push(w);
-  }
-
-  // Allow 1 to 4 words (Toyin / Toyin Alabi / etc.)
-  if (words.length < 1) return null;
-  words = words.slice(0, 4);
-
-  // Capitalize nicely
   const name = words
+    .slice(0,4)
     .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ")
-    .trim();
+    .join(" ");
 
-  return name || null;
+  return name;
 }
 // Stop reading name when we hit connector words
 const stopAt = new Set([
@@ -294,12 +270,6 @@ const stopAt = new Set([
 ]);
 
 let words = [];
-for (const w of rawWords) {
-  const lw = w.toLowerCase();
-  if (stopAt.has(lw)) break;
-  if (stopwords.has(lw)) continue;
-  words.push(w);
-}
 
   if (words.length < 2) return null;
 
