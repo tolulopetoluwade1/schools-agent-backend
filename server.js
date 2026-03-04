@@ -1086,6 +1086,12 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+// Start the web server immediately so Render detects the port
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ Server listening on port ${PORT}`);
+});
+
+// Then connect to the database in the background
 async function start() {
   try {
     await sequelize.authenticate();
@@ -1093,15 +1099,8 @@ async function start() {
 
     await sequelize.sync({ alter: true });
     console.log("✅ Tables synced");
-
- 
-
-    app.listen(PORT, () => {
-      console.log(`✅ Server running on http://localhost:${PORT}`);
-    });
   } catch (err) {
-    console.error("❌ Startup error:", err.message);
-    process.exit(1);
+    console.error("❌ Startup DB error:", err.message);
   }
 }
 
