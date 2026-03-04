@@ -287,33 +287,6 @@ function extractChildName(rawText) {
 
   return name || null;
 }
-  // Remove common intro phrases
-  t = t.replace(/my child'?s name is/i, "");
-  t = t.replace(/my son's name is/i, "");
-  t = t.replace(/my daughter'?s name is/i, "");
-  t = t.replace(/his name is/i, "");
-  t = t.replace(/her name is/i, "");
-  t = t.replace(/name is/i, "");
-  t = t.replace(/it's/i, "");
-
-  // Take only the first part before punctuation
-  t = t.split(/[.,;\n]/)[0].trim();
-
-  // Convert non-letters to spaces
-  t = t.replace(/[^a-zA-Z\s'-]/g, " ");
-  t = t.replace(/\s+/g, " ").trim();
-
-  if (t.length < 2) return null;
-
-  const stopwords = new Set([
-    "and","but","pls","please","kindly",
-    "she","he","is","was","am","are",
-    "very","shy","quiet","too","also",
-    "my","child","son","daughter","name"
-  ]);
-
-let rawWords = t.split(" ").map(w => w.trim()).filter(Boolean);
-
 // Stop reading name when we hit connector words
 const stopAt = new Set([
   "and", "but", "because", "honestly", "pls", "please", "kindly",
