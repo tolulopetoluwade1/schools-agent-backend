@@ -1,8 +1,6 @@
 // =====================
 // server.js (CLEAN VERSION)
 // =====================
-
-const env = require("./config/env");
 require("dotenv").config();
 
 const cors = require("cors");
@@ -119,6 +117,27 @@ function normalizePhone(phone) {
   const cleaned = phone.toString().trim().replace(/\s+/g, "").replace(/^\++/, "");
   return `+${cleaned}`;
 }
+function continuePromptFor(conversation) {
+  const step = conversation?.admissionStep;
+
+  if (conversation?.invoiceStatus === "pending") {
+    return "To continue, please reply with your email address or type SKIP.";
+  }
+
+  if (!step || step === "" || step === "ASK_CHILD_NAME") {
+    return "To continue admission, please tell me your child's full name.";
+  }
+
+  if (step === "ASK_CHILD_AGE") {
+    return `To continue, how old is ${conversation.childName || "your child"}? (Just a number like 6)`;
+  }
+
+  if (step === "ASK_DESIRED_CLASS") {
+    return "To continue, which class are you applying for? (e.g., Nursery 2, Primary 5)";
+  }
+
+  return "To continue, please reply to the last question.";
+}
 
 function getFeeForClass(desiredClass) {
   const c = (desiredClass || "").toLowerCase();
@@ -231,13 +250,13 @@ function matchFaq(text) {
   return FAQS.find((f) => f.keywords.some((k) => t.includes(k)));
 }
 
-async function llmFaqAnswer({ school, question }) {
-  // LLM feature flag
+async function llmFallbackAnswer({ school, question, conversation }) {
+  // feature flag
   if (process.env.LLM_FALLBACK_ENABLED !== "true") {
     return "I’m not sure—please contact the school admin.";
   }
 
-  // If OpenAI is not configured, do NOT crash
+  // don't crash if not configured
   if (!openai) {
     return "I’m not sure—please contact the school admin.";
   }
@@ -246,9 +265,9 @@ async function llmFaqAnswer({ school, question }) {
 
   const instructions =
     "You are a school admissions assistant for a Nigerian school. " +
-    "Answer ONLY using the SCHOOL INFO provided. " +
+    "Answer ONLY using SCHOOL INFO. " +
     "If the answer is not in the info, say: 'I’m not sure—please contact the school admin.' " +
-    "Keep it short (1-4 lines).";
+    "Be short (1-4 lines).";
 
   const schoolInfo = [
     `School name: ${school?.name || ""}`,
@@ -256,11 +275,23 @@ async function llmFaqAnswer({ school, question }) {
     `Map: ${school?.mapsLink || ""}`,
   ].join("\n");
 
+  const currentState = [
+    `Current admissionStep: ${conversation?.admissionStep || ""}`,
+    `Child name: ${conversation?.childName || ""}`,
+    `Child age: ${conversation?.childAge || ""}`,
+    `Desired class: ${conversation?.desiredClass || ""}`,
+    `Invoice status: ${conversation?.invoiceStatus || ""}`,
+  ].join("\n");
+
   try {
     const resp = await openai.responses.create({
       model,
       instructions,
-      input: `SCHOOL INFO:\n${schoolInfo}\n\nPARENT QUESTION:\n${question}`,
+      input:
+        `SCHOOL INFO:\n${schoolInfo}\n\n` +
+        `CURRENT STATE:\n${currentState}\n\n` +
+        `PARENT MESSAGE:\n${question}\n\n` +
+        `If the message is not a question, reply politely and guide them back to the next required step.`,
     });
 
     return (resp.output_text || "").trim() || "I’m not sure—please contact the school admin.";
@@ -269,7 +300,6 @@ async function llmFaqAnswer({ school, question }) {
     return "I’m not sure—please contact the school admin.";
   }
 }
-
 // ---------------------
 // WhatsApp Cloud send helper
 // ---------------------
@@ -352,65 +382,120 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
   // Question / FAQ / LLM branch
   // ---------------------
   const faq = matchFaq(text);
-  const looksLikeQuestion = text.trim().endsWith("?") || Boolean(faq);
-  // ===== GREETING HANDLER (ADD THIS BLOCK) =====
-const greetingWords = ["hi","hello","hey","hiya","good morning","good afternoon","good evening"];
-const cleanGreeting = text.trim().toLowerCase();
+const cleanText = text.trim().toLowerCase();
 
-if (greetingWords.includes(cleanGreeting)) {
+// Global intents (always handled regardless of flow)
+const greetingWords = ["hi","hello","hey","hiya","helloooo","good morning","good afternoon","good evening"];
+if (greetingWords.includes(cleanText)) {
+  const reply = `Hi 👋\n\n${continuePromptFor(conversation)}`;
 
-  if (conversation.admissionStep === "ASK_DESIRED_CLASS") {
-    return "Hi 👋 Please tell me the class you are applying for (e.g., Nursery 2 or Primary 5).";
-  }
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: reply,
+    providerTimestamp: null,
+  });
 
-  if (conversation.admissionStep === "ASK_CHILD_AGE") {
-    return `Hi 👋 How old is ${conversation.childName || "your child"}? (Just a number like 6)`;
-  }
-
-  if (!conversation.admissionStep || conversation.admissionStep === "ASK_CHILD_NAME") {
-    return "Hi 👋 Please tell me your child's full name.";
-  }
-
-  return "Hi 👋 How can I help? (admission, fees, timetable)";
+  return reply;
 }
-// ===== END GREETING HANDLER =====
 
-  if (looksLikeQuestion) {
-    let replyText = "I’m not sure—please contact the school admin.";
-
-    if (faq) {
-      const isAddressQuestion =
-        faq.keywords.includes("address") ||
-        faq.keywords.includes("location") ||
-        faq.keywords.includes("where");
-
-      if (isAddressQuestion) {
-        if (schoolRecord && schoolRecord.address) {
-          replyText = `📍 Address: ${schoolRecord.address}`;
-          if (schoolRecord.mapsLink) replyText += `\n🗺️ Map: ${schoolRecord.mapsLink}`;
-        } else {
-          replyText = "Address is not set yet. Please contact the school admin.";
-        }
-      } else {
-        replyText = faq.answer;
-      }
-    } else {
-      replyText = await llmFaqAnswer({ school: schoolRecord, question: text });
-    }
-
-    const continuePrompt = "To continue admission, please tell me your child's full name.";
-
-    // Save outbound
-    await Message.create({
-      conversationId: conversation.id,
-      direction: "outbound",
-      from: "agent",
-      text: `${replyText}\n\n${continuePrompt}`,
-      providerTimestamp: null,
-    });
-
-    return `${replyText}\n\n${continuePrompt}`;
+// If they ask fees anytime
+if (looksLikeFeeQuestion(text)) {
+  let replyText = "";
+  if (conversation.desiredClass) {
+    const fee = getFeeForClass(conversation.desiredClass);
+    replyText = `Tuition fee for ${conversation.desiredClass}: ₦${fee.toLocaleString()} (NGN).`;
+  } else {
+    replyText =
+      "Tuition fee depends on class.\n" +
+      "- Nursery: ₦25,000\n" +
+      "- Primary 1–2: ₦35,000\n" +
+      "- Primary (others): ₦40,000";
   }
+
+  const reply = `${replyText}\n\n${continuePromptFor(conversation)}`;
+
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: reply,
+    providerTimestamp: null,
+  });
+
+  return reply;
+}
+
+// FAQ keyword match anytime
+if (faq) {
+  let replyText = faq.answer;
+
+  // address uses DB if available
+  const isAddressQuestion =
+    faq.keywords.includes("address") ||
+    faq.keywords.includes("location") ||
+    faq.keywords.includes("where");
+
+  if (isAddressQuestion) {
+    if (schoolRecord?.address) {
+      replyText = `📍 Address: ${schoolRecord.address}`;
+      if (schoolRecord.mapsLink) replyText += `\n🗺️ Map: ${schoolRecord.mapsLink}`;
+    } else {
+      replyText = "Address is not set yet. Please contact the school admin.";
+    }
+  }
+
+  const reply = `${replyText}\n\n${continuePromptFor(conversation)}`;
+
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: reply,
+    providerTimestamp: null,
+  });
+
+  return reply;
+}
+
+// ✅ HERE is the improvement:
+// If message is not fitting the current step AND LLM is enabled, use LLM as fallback.
+const expectedStep = conversation?.invoiceStatus === "pending"
+  ? "EXPECT_EMAIL_OR_SKIP"
+  : (conversation?.admissionStep || "ASK_CHILD_NAME");
+
+const messageLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
+const messageLooksLikeAge = /^\s*\d{1,2}\s*$/.test(text.trim());
+const messageLooksLikeClass = /nursery|primary/i.test(text);
+
+// Decide if message is “off-flow”
+const offFlow =
+  (expectedStep === "EXPECT_EMAIL_OR_SKIP" && !(messageLooksLikeEmail || cleanText === "skip")) ||
+  (expectedStep === "ASK_CHILD_AGE" && !messageLooksLikeAge) ||
+  (expectedStep === "ASK_DESIRED_CLASS" && !messageLooksLikeClass) ||
+  (expectedStep === "ASK_CHILD_NAME" && extractChildName(text) === null);
+
+// If off-flow → call LLM and then guide them back
+if (offFlow) {
+  const llmText = await llmFallbackAnswer({
+    school: schoolRecord,
+    question: text,
+    conversation,
+  });
+
+  const reply = `${llmText}\n\n${continuePromptFor(conversation)}`;
+
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: reply,
+    providerTimestamp: null,
+  });
+
+  return reply;
+}
 
   // ---------------------
   // POST-PAYMENT (COMPLETED)
@@ -481,36 +566,7 @@ if (greetingWords.includes(cleanGreeting)) {
     return replyText;
   }
 
-  // ---------------------
-  // Fee question shortcut
-  // ---------------------
-  if (looksLikeFeeQuestion(text)) {
-    let replyText = "";
 
-    if (conversation.desiredClass) {
-      const fee = getFeeForClass(conversation.desiredClass);
-      replyText =
-        `Tuition fee for ${conversation.desiredClass}: ₦${fee.toLocaleString()} (NGN).\n` +
-        `If you want to start admission, reply with your child's full name.`;
-    } else {
-      replyText =
-        "Tuition fee depends on class.\n" +
-        "- Nursery: ₦25,000\n" +
-        "- Primary 1–2: ₦35,000\n" +
-        "- Primary (others): ₦40,000\n\n" +
-        "To start admission, please tell me your child's full name.";
-    }
-
-    await Message.create({
-      conversationId: conversation.id,
-      direction: "outbound",
-      from: "agent",
-      text: replyText,
-      providerTimestamp: null,
-    });
-
-    return replyText;
-  }
 
   // ---------------------
   // Admission flow
