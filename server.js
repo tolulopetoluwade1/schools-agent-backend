@@ -353,6 +353,27 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
   // ---------------------
   const faq = matchFaq(text);
   const looksLikeQuestion = text.trim().endsWith("?") || Boolean(faq);
+  // ===== GREETING HANDLER (ADD THIS BLOCK) =====
+const greetingWords = ["hi","hello","hey","hiya","good morning","good afternoon","good evening"];
+const cleanGreeting = text.trim().toLowerCase();
+
+if (greetingWords.includes(cleanGreeting)) {
+
+  if (conversation.admissionStep === "ASK_DESIRED_CLASS") {
+    return "Hi 👋 Please tell me the class you are applying for (e.g., Nursery 2 or Primary 5).";
+  }
+
+  if (conversation.admissionStep === "ASK_CHILD_AGE") {
+    return `Hi 👋 How old is ${conversation.childName || "your child"}? (Just a number like 6)`;
+  }
+
+  if (!conversation.admissionStep || conversation.admissionStep === "ASK_CHILD_NAME") {
+    return "Hi 👋 Please tell me your child's full name.";
+  }
+
+  return "Hi 👋 How can I help? (admission, fees, timetable)";
+}
+// ===== END GREETING HANDLER =====
 
   if (looksLikeQuestion) {
     let replyText = "I’m not sure—please contact the school admin.";
