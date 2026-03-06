@@ -814,6 +814,39 @@ app.get("/admin/conversation/:conversationId/messages", requireAdminKey, async (
     return res.status(500).json({ success: false, error: error.message });
   }
 });
+// Reset conversation
+app.post("/admin/conversation/:conversationId/reset", requireAdminKey, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+
+    const conversation = await Conversation.findByPk(conversationId);
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    conversation.admissionStep = null;
+    conversation.childName = null;
+    conversation.childAge = null;
+    conversation.desiredClass = null;
+    conversation.feeAmount = null;
+    conversation.feeCurrency = null;
+    conversation.awaitingInvoiceConsent = false;
+    conversation.invoiceStatus = "none";
+    conversation.status = "open";
+
+    await conversation.save();
+
+    return res.json({
+      success: true,
+      message: "Conversation reset successfully",
+      conversationId: conversation.id
+    });
+
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Global error handler
 app.use((err, req, res, next) => {
