@@ -832,8 +832,11 @@ app.post("/admin/conversation/:conversationId/reset", requireAdminKey, async (re
     conversation.feeAmount = null;
     conversation.feeCurrency = null;
     conversation.awaitingInvoiceConsent = false;
+    conversation.awaitingInvoiceDetails = false;
     conversation.invoiceStatus = "none";
+
     conversation.status = "open";
+    conversation.lastMessageAt = null;
 
     await conversation.save();
 
