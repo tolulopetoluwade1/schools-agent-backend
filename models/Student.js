@@ -1,34 +1,43 @@
-const mongoose = require("mongoose");
+module.exports = (sequelize, DataTypes) => {
+  const Student = sequelize.define(
+    "Student",
+    {
+      id: {
+        type: DataTypes.INTEGER,
+        autoIncrement: true,
+        primaryKey: true,
+      },
 
-const studentSchema = new mongoose.Schema({
+      schoolId: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
 
-  name: {
-    type: String,
-    required: true
-  },
+      parentId: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
 
-  class: {
-    type: String,
-    required: true
-  },
+      fullName: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
 
-  parent: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Parent",
-    required: true
-  },
+      className: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
 
-  school: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "School",
-    required: true
-  },
+      termFee: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
+    },
+    {
+      tableName: "students",
+      timestamps: true,
+    }
+  );
 
-  fees: {
-    type: Number,
-    required: true
-  }
-
-}, { timestamps: true });
-
-module.exports = mongoose.model("Student", studentSchema);
+  return Student;
+};
