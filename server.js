@@ -82,15 +82,20 @@ const SchoolModel = require("./models/School");
 const ParentModel = require("./models/Parent");
 const ConversationModel = require("./models/Conversation");
 const MessageModel = require("./models/Message");
+const StudentModel = require("./models/Student");
 
 const School = SchoolModel(sequelize, DataTypes);
 const Parent = ParentModel(sequelize, DataTypes);
 const Conversation = ConversationModel(sequelize, DataTypes);
 const Message = MessageModel(sequelize, DataTypes);
+const Student = StudentModel(sequelize, DataTypes);
 
 // Relationships
 School.hasMany(Parent, { foreignKey: "schoolId" });
 Parent.belongsTo(School, { foreignKey: "schoolId" });
+
+Parent.hasMany(Student, { foreignKey: "parentId" });
+Student.belongsTo(Parent, { foreignKey: "parentId" });
 
 School.hasMany(Conversation, { foreignKey: "schoolId" });
 Conversation.belongsTo(School, { foreignKey: "schoolId" });
