@@ -83,12 +83,14 @@ const ParentModel = require("./models/Parent");
 const ConversationModel = require("./models/Conversation");
 const MessageModel = require("./models/Message");
 const StudentModel = require("./models/Student");
+const PaymentModel = require("./models/Payment");
 
 const School = SchoolModel(sequelize, DataTypes);
 const Parent = ParentModel(sequelize, DataTypes);
 const Conversation = ConversationModel(sequelize, DataTypes);
 const Message = MessageModel(sequelize, DataTypes);
 const Student = StudentModel(sequelize, DataTypes);
+const Payment = PaymentModel(sequelize, DataTypes);
 
 // Relationships
 School.hasMany(Parent, { foreignKey: "schoolId" });
@@ -853,6 +855,40 @@ app.post("/admin/conversation/:conversationId/reset", requireAdminKey, async (re
 
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------
+// Create Student API
+// ---------------------
+app.post("/students", async (req, res) => {
+  try {
+    const { name, className, schoolId, parentId } = req.body;
+
+    if (!name || !className || !schoolId || !parentId) {
+      return res.status(400).json({
+        success: false,
+        message: "name, className, schoolId and parentId are required",
+      });
+    }
+
+    const student = await Student.create({
+      name,
+      className,
+      schoolId,
+      parentId,
+    });
+
+    return res.json({
+      success: true,
+      student,
+    });
+  } catch (error) {
+    console.error("Create student error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create student",
+    });
   }
 });
 
