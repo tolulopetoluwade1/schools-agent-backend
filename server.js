@@ -9,6 +9,8 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { Sequelize, DataTypes } = require("sequelize");
 const OpenAI = require("openai");
+const paymentRoutes = require("./routes/paymentRoutes");
+
 
 // ---------------------
 // App init
@@ -20,6 +22,7 @@ app.set("trust proxy", true);
 
 // Body parsing
 app.use(express.json({ limit: "200kb" }));
+app.use("/uploads", express.static("uploads"));
 
 // Request logger (keep it simple)
 app.use((req, res, next) => {
@@ -64,7 +67,7 @@ if (process.env.OPENAI_API_KEY) {
 
 // ---------------------
 // DB init
-// ---------------------
+// ---------------------  
 const sequelize = new Sequelize(
   process.env.DB_NAME,
   process.env.DB_USER,
@@ -76,6 +79,9 @@ const sequelize = new Sequelize(
     logging: false,
   }
 );
+const WhatsAppNumberModel = require("./models/WhatsAppNumber");
+const WhatsAppNumber = WhatsAppNumberModel(sequelize, DataTypes);
+
 
 // Models
 const SchoolModel = require("./models/School");
@@ -84,6 +90,8 @@ const ConversationModel = require("./models/Conversation");
 const MessageModel = require("./models/Message");
 const StudentModel = require("./models/Student");
 const PaymentModel = require("./models/Payment");
+const PaymentInstallmentModel = require("./models/PaymentInstallment");
+const startInstallmentReminder = require("./services/installmentReminderService");
 
 const School = SchoolModel(sequelize, DataTypes);
 const Parent = ParentModel(sequelize, DataTypes);
@@ -91,6 +99,19 @@ const Conversation = ConversationModel(sequelize, DataTypes);
 const Message = MessageModel(sequelize, DataTypes);
 const Student = StudentModel(sequelize, DataTypes);
 const Payment = PaymentModel(sequelize, DataTypes);
+const PaymentInstallment = PaymentInstallmentModel(sequelize, DataTypes);
+
+// Relationship (each number belongs to a school)
+School.hasMany(WhatsAppNumber, { foreignKey: "schoolId" });
+WhatsAppNumber.belongsTo(School, { foreignKey: "schoolId" });
+
+
+const PaymentInstallmentRoutes = require("./routes/paymentInstallmentRoutes")(PaymentInstallment);
+
+app.use("/api/installments", PaymentInstallmentRoutes);
+
+// Payment routes
+app.use("/api/payments", paymentRoutes(Payment));
 
 // Relationships
 School.hasMany(Parent, { foreignKey: "schoolId" });
@@ -729,15 +750,28 @@ app.post("/webhook", async (req, res) => {
 
     console.log("✅ INCOMING TEXT:", text, "FROM:", from);
 
-    const schoolId = Number(process.env.DEFAULT_SCHOOL_ID || 1);
+    // Normalize incoming number
+    const normalizedFrom = `+${from}`;
 
-    const replyText = await processInboundMessage({
-      channel: "whatsapp",
-      from: `+${from}`,
-      schoolId,
-      text,
-      timestamp: new Date().toISOString(),
+    // Look up the school for this number
+    const numberRecord = await WhatsAppNumber.findOne({
+      where: { phoneNumber: normalizedFrom },
     });
+
+    if (!numberRecord) {
+      console.log("❌ Incoming number not recognized:", normalizedFrom);
+      return; // or send a polite message back
+    }
+
+const schoolId = numberRecord.schoolId;
+
+   const replyText = await processInboundMessage({
+  channel: "whatsapp",
+  from: normalizedFrom, // from Step 2
+  schoolId,             // now dynamic
+  text,
+  timestamp: new Date().toISOString(),
+});
 
     await sendWhatsAppText(from, replyText);
   } catch (err) {
@@ -778,6 +812,109 @@ app.get("/admin/conversations/:schoolId", requireAdminKey, async (req, res) => {
     return res.json({ success: true, count: conversations.length, conversations });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+// ---------------------
+// Admin list pending payments
+// ---------------------
+app.get("/admin/payments/pending", requireAdminKey, async (req, res) => {
+  try {
+
+    const payments = await Payment.findAll({
+      where: { status: "verification_pending" },
+      order: [["createdAt", "DESC"]]
+    });
+
+    return res.json({
+      success: true,
+      count: payments.length,
+      payments
+    });
+
+  } catch (error) {
+    console.error("Fetch pending payments error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch pending payments"
+    });
+  }
+});
+// ---------------------
+// Admin approve payment
+// ---------------------
+app.post("/admin/payments/:paymentId/approve", requireAdminKey, async (req, res) => {
+  try {
+
+    const { paymentId } = req.params;
+
+    const payment = await Payment.findByPk(paymentId);
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found"
+      });
+    }
+
+    payment.status = "paid";
+
+    await payment.save();
+
+    return res.json({
+      success: true,
+      message: "Payment approved",
+      payment
+    });
+
+  } catch (error) {
+    console.error("Approve payment error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to approve payment"
+    });
+  }
+});
+// ---------------------
+// Auto-approve payment (TEST MODE - no Paystack yet)
+// ---------------------
+app.post("/payments/:paymentId/auto-approve", async (req, res) => {
+  try {
+
+    const { paymentId } = req.params;
+
+    // Find the payment
+    const payment = await Payment.findByPk(paymentId);
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found"
+      });
+    }
+
+    // For now we skip Paystack verification
+    // and directly mark the payment as paid
+
+    payment.status = "paid";
+
+    await payment.save();
+
+    return res.json({
+      success: true,
+      message: "Payment automatically approved (TEST MODE)",
+      payment
+    });
+
+  } catch (error) {
+
+    console.error("Auto approve error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Auto approval failed"
+    });
+
   }
 });
 
@@ -914,6 +1051,8 @@ app.listen(PORT, "0.0.0.0", () => {
     console.log("✅ DB connected to:", process.env.DB_NAME);
     await sequelize.sync({ alter: true });
     console.log("✅ Tables synced");
+    startInstallmentReminder(PaymentInstallment, Parent, Student, sendWhatsAppText);
+    console.log("✅ Installment reminder service started");
   } catch (err) {
     console.error("❌ DB init error:", err.message);
   }

@@ -47,6 +47,12 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+
+      // NEW FIELD for receipt upload
+      receiptImage: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
     },
     {
       tableName: "payments",
