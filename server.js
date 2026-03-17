@@ -715,6 +715,15 @@ app.get("/health", (req, res) => {
     invoiceSendEnabled: process.env.INVOICE_SEND_ENABLED === "true",
   });
 });
+
+app.get("/privacy", (req, res) => {
+  res.send(`
+    <h1>Privacy Policy</h1>
+    <p>This application collects user messages for the purpose of school admission automation.</p>
+    <p>No personal data is shared with third parties.</p>
+    <p>Contact: admin@example.com</p>
+  `);
+});
 // ✅ ADD THIS RIGHT HERE
 app.post("/admin/add-number", async (req, res) => {
   try {
