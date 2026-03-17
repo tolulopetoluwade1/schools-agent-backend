@@ -715,6 +715,21 @@ app.get("/health", (req, res) => {
     invoiceSendEnabled: process.env.INVOICE_SEND_ENABLED === "true",
   });
 });
+// ✅ ADD THIS RIGHT HERE
+app.post("/admin/add-number", async (req, res) => {
+  try {
+    const { phoneNumber, schoolId } = req.body;
+
+    const record = await WhatsAppNumber.create({
+      phoneNumber,
+      schoolId,
+    });
+
+    res.json({ success: true, record });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Meta WhatsApp webhook verify
 app.get("/webhook", (req, res) => {
