@@ -21,7 +21,7 @@ WhatsAppNumber.belongsTo(School, { foreignKey: "schoolId" });
 
   // Example: School with ID 1
   await WhatsAppNumber.create({
-    phoneNumber: "+2348130000000", // replace with the actual number of the school
+    phoneNumber: "+2348137137336", // replace with the actual number of the school
     schoolId: 1,
   });
 
