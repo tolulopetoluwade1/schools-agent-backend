@@ -721,7 +721,7 @@ app.get("/privacy", (req, res) => {
     <h1>Privacy Policy</h1>
     <p>This application collects user messages for the purpose of school admission automation.</p>
     <p>No personal data is shared with third parties.</p>
-    <p>Contact: admin@example.com</p>
+    <p>Contact: skilledskooltutors@gmail.com</p>
   `);
 });
 // ✅ ADD THIS RIGHT HERE
