@@ -1,14 +1,11 @@
-const cron = require("node-cron");
+module.exports = async (PaymentInstallment, Parent, Student, telegramBot) => {
+  console.log("⏰ Running daily installment reminder...");
 
-module.exports = (PaymentInstallment, Parent, Student, sendWhatsAppText) => {
-  // runs every minute for testing; change schedule for production
-  cron.schedule("* * * * *", async () => {
-    console.log("Running installment reminder check...");
+  const today = new Date();
+  const reminderDate = new Date();
+  reminderDate.setDate(today.getDate() + 3); // 3 days before due
 
-    const today = new Date();
-    const reminderDate = new Date();
-    reminderDate.setDate(today.getDate() + 3); // 3 days before due
-
+  try {
     // Get all pending installments
     const dueInstallments = await PaymentInstallment.findAll({
       where: { status: "pending" },
@@ -36,15 +33,19 @@ module.exports = (PaymentInstallment, Parent, Student, sendWhatsAppText) => {
         const message = `Reminder: ${student.fullName}'s installment of ₦${installment.amountDue.toLocaleString()} is due on ${dueDate.toLocaleDateString()}. Please make payment promptly.`;
         console.log("Reminder (console):", message);
 
-        if (parent?.phone) {
+        if (parent?.telegramId && telegramBot) {
           try {
-            await sendWhatsAppText(parent.phone, message);
-            console.log(`✅ WhatsApp sent to ${parent.phone}`);
+            await telegramBot.telegram.sendMessage(parent.telegramId, message);
+            console.log(`✅ Telegram reminder sent to ${parent.telegramId}`);
           } catch (err) {
-            console.error(`❌ WhatsApp failed for ${parent.phone}:`, err.message);
+            console.error(`❌ Telegram failed for ${parent.telegramId}:`, err.message);
           }
+        } else {
+          console.log(`⚠️ Parent ${parent.id} has no Telegram ID, skipping reminder.`);
         }
       }
     }
-  });
+  } catch (error) {
+    console.error("❌ Installment reminder failed:", error);
+  }
 };

@@ -10,5 +10,9 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: false,
     },
+    telegramId: {            // <-- Add this
+      type: DataTypes.STRING,
+      allowNull: true,       // can be empty at first
+    },
   });
 };

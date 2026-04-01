@@ -166,6 +166,27 @@ Please ensure payment before the due dates.`;
       res.status(500).json({ error: "Server error" });
     }
   });
+  // ---------------------
+// GET ALL installments (DEBUG)
+// GET /api/installments
+// ---------------------
+router.get("/", async (req, res) => {
+  try {
+    const installments = await PaymentInstallment.findAll();
+
+    return res.json({
+      success: true,
+      count: installments.length,
+      installments,
+    });
+  } catch (error) {
+    console.error("Error fetching installments:", error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
   return router;
 };

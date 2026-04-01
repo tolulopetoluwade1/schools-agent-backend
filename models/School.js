@@ -26,6 +26,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      aiKnowledge: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      },
     },
     {
       tableName: "schools",
