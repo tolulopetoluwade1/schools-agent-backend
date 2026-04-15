@@ -2,6 +2,7 @@
 // server.js (Telegram-ready, Chunk 1)
 // =====================
 require("dotenv").config();
+console.log("DB URL:", process.env.DATABASE_URL);
 console.log("ADMIN KEY:", process.env.ADMIN_API_KEY);
 const cors = require("cors");
 const express = require("express");
@@ -12,6 +13,7 @@ const OpenAI = require("openai");
 const paymentRoutes = require("./routes/paymentRoutes");
 const cron = require("node-cron");
 const updateAiKnowledge = require("./services/aiKnowledgeUpdater");
+const aiAgentDecision = require("./aiAgent");
 
 // ---------------------
 // App init
@@ -71,6 +73,12 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: "postgres",
   protocol: "postgres",
   logging: false,
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false,
+    },
+  },
 });
 
 
@@ -91,6 +99,8 @@ const PaymentInstallmentModel = require("./models/PaymentInstallment");
 const startInstallmentReminder = require("./services/installmentReminderService");
 
 const School = SchoolModel(sequelize, DataTypes);
+const schoolRoutes = require("./routes/schoolRoutes")(School);
+app.use("/api/schools", schoolRoutes);
 const Parent = ParentModel(sequelize, DataTypes);
 const Conversation = ConversationModel(sequelize, DataTypes);
 const Message = MessageModel(sequelize, DataTypes);
@@ -104,6 +114,8 @@ app.use("/api/installments", PaymentInstallmentRoutes);
 
 // Payment routes
 app.use("/api/payments", paymentRoutes(Payment));
+const studentRoutes = require("./routes/studentRoutes")(Student);
+app.use("/api/students", studentRoutes);
 
 // ---------------------
 // Relationships
@@ -280,36 +292,9 @@ async function llmFallbackAnswer({ school, question, conversation }) {
     const q = question.toLowerCase();
 
     // =========================
-    // 1️⃣ WHO IS OWING FEES (STRICT)
+    // 1️⃣ WHO IS OWING FEES
     // =========================
-    if (
-  q.includes("who is owing") ||
-  q.includes("students owing") ||
-  q.includes("who owes") ||
-  q.includes("owing list") ||
-  q.includes("list of students")
-) {
-  const studentsOwing = await PaymentInstallment.findAll({
-    where: { schoolId: school.id, status: "pending" },
-    include: [{ model: Student, attributes: ["fullName"] }],
-  });
-
-  const summaryMap = {};
-
-  studentsOwing.forEach(s => {
-    const name = s.Student?.fullName || "Unknown Student";
-    const amount = s.amountDue || 0;
-
-    if (!summaryMap[name]) summaryMap[name] = 0;
-    summaryMap[name] += amount;
-  });
-
-  const result = Object.entries(summaryMap)
-    .map(([name, total]) => `• ${name}: ₦${total}`)
-    .join("\n");
-
-  return result || "No students are currently owing fees.";
-}
+    
 
     // =========================
     // 2️⃣ SCHOOL LOCATION
@@ -326,136 +311,170 @@ async function llmFallbackAnswer({ school, question, conversation }) {
     // 3️⃣ SCHOOL FEES
     // =========================
     if (
-  q.includes("school fee") ||
-  q.includes("tuition") ||
-  q.includes("how much")
+  (q.includes("school fee") ||
+   q.includes("tuition") ||
+   q.includes("how much"))
+  &&
+  !q.includes("owe") &&
+  !q.includes("owing") &&
+  !q.includes("debt") &&
+  !q.includes("not paid")
+  ) 
+    {
+      try {
+        const data = JSON.parse(school.aiKnowledge);
+
+        const nursery = data.fees?.nursery;
+        const primary = data.fees?.primary;
+
+        return `Tuition is ₦${nursery} for Nursery and ₦${primary} for Primary`;
+      } catch (e) {
+        return "School fee info not available.";
+      }
+    }
+
+    // =========================
+    // 4️⃣ Owing Count (Improved)
+    // =========================
+    if (
+  q.includes("owing") ||
+  q.includes("debt") ||
+  q.includes("owe") ||
+  q.includes("not paid") ||
+  q.includes("outstanding") ||
+  q.includes("unpaid")
 ) {
   try {
-    const data = JSON.parse(school.aiKnowledge);
+    const studentsOwing = await PaymentInstallment.findAll({
+      where: { schoolId: school.id, status: "pending" },
+      include: [{ model: Student, attributes: ["fullName"] }],
+    });
 
-    const nursery = data.fees?.nursery;
-    const primary = data.fees?.primary;
+    const summary = {};
 
-    return `Tuition is ₦${nursery} for Nursery and ₦${primary} for Primary`;
-  } catch (e) {
-    return "School fee info not available.";
-  }
-}
-if (
-  q.includes("how many") &&
-  q.includes("owing")
-) {
-  try {
-    const data = JSON.parse(school.aiKnowledge);
-    return `${data.stats.studentsOwing} students are currently owing fees`;
+    studentsOwing.forEach(s => {
+      const name = s.Student?.fullName || "Unknown Student";
+      const amount = s.amountDue || 0;
+
+      if (!summary[name]) summary[name] = 0;
+      summary[name] += amount;
+    });
+
+    const studentList = Object.entries(summary)
+      .map(([name, total]) => `• ${name}: ₦${total}`)
+      .join("\n");
+
+    const count = Object.keys(summary).length;
+
+    // 🎯 CONTROL RESPONSE BASED ON QUESTION
+      if (
+        q.includes("how many") ||
+        q.includes("number") ||
+        q.includes("count")
+      ) 
+      {
+      return `Currently, ${count} students have outstanding fees.`;
+    }
+
+    if (
+      q.includes("who") ||
+      q.includes("which") ||
+      q.includes("list") ||
+      q.includes("details") ||
+      q.includes("show") ||
+      q.includes("give me") ||
+      q.includes("debtors")
+      ) 
+    {
+      return studentList || "No students are currently owing fees.";
+    }
+
+    // DEFAULT (SMART)
+    return `Currently, ${count} students have outstanding fees:\n${studentList}`;
+
   } catch (e) {
     return "Owing data not available.";
   }
 }
+
     // =========================
-    // 4️⃣ LLM (ONLY IF AVAILABLE)
+    // 5️⃣ LLM FALLBACK
     // =========================
-    if (process.env.LLM_FALLBACK_ENABLED === "true" && openai) {
-      const resp = await openai.responses.create({
-        model: process.env.OPENAI_MODEL || "gpt-5-mini",
-        input: `
-School Info:
+  if (process.env.LLM_FALLBACK_ENABLED === "true" && openai) {
+
+  // 🔥 GET REAL DATA
+  const studentsOwing = await PaymentInstallment.findAll({
+    where: { schoolId: school.id, status: "pending" },
+    include: [{ model: Student, attributes: ["fullName"] }],
+  });
+
+  const owingSummary = studentsOwing.length
+    ? studentsOwing.map(s => {
+        const name = s.Student?.fullName || "Unknown Student";
+        const amount = s.amountDue || 0;
+        return `• ${name}: ₦${amount}`;
+      }).join("\n")
+    : "No students are currently owing fees.";
+
+  // 🔥 INSTRUCTIONS
+  const instructions = `
+You are a smart school assistant for a Nigerian school.
+
+Rules:
+- Use ONLY the data provided
+- Be short (max 4 lines)
+- Be friendly and natural
+- Never say "I don’t have data" if data is given
+- Do not hallucinate
+
+Style:
+- Speak like a helpful school admin
+- Keep it simple and clear
+`;
+
+  // 🔥 CONTEXT (MEMORY)
+  const context = `
+School:
+Name: ${school.name}
+Address: ${school.address}
+
+Knowledge:
 ${school.aiKnowledge}
 
-Question:
-${question}
-        `,
-      });
+Students Owing:
+${owingSummary}
 
-      return resp.output_text || "I’m not sure—please contact the school admin.";
-    }
+Conversation:
+Step: ${conversation?.admissionStep || ""}
+Child: ${conversation?.childName || ""}
+Class: ${conversation?.desiredClass || ""}
+Invoice: ${conversation?.invoiceStatus || ""}
+`;
 
-    // =========================
-    // 5️⃣ FINAL FALLBACK
-    // =========================
-    return "I’m not sure—please contact the school admin.";
+  const resp = await openai.responses.create({
+    model: process.env.OPENAI_MODEL || "gpt-5-mini",
+    instructions,
+    input: `
+${context}
 
-  } catch (e) {
-    console.log("❌ LLM error:", e.message);
-    return "I’m not sure—please contact the school admin.";
-  }
+User: ${question}
+
+Respond naturally.
+    `,
+  });
+
+  return resp.output_text || "I’m not sure—please contact the school admin.";
 }
-// async function llmFallbackAnswer({ school, question, conversation }) {
-//   if (process.env.LLM_FALLBACK_ENABLED !== "true") {
-//     return "I’m not sure—please contact the school admin.";
-//   }
+// =========================
+// FINAL FALLBACK
+// =========================
+return "I’m not sure—please contact the school admin.";
 
-//   if (!openai) return "I’m not sure—please contact the school admin.";
-
-//   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
-
-//   // 1️⃣ Fetch dynamic info from DB
-//   const studentsOwing = await PaymentInstallment.findAll({
-//     where: { schoolId: school.id, status: "pending" },
-//     include: [{ model: Student, attributes: ["fullName"] }],
-//   });
-
-//   const owingSummary = studentsOwing.length
-//   ? studentsOwing.map(s => {
-//       const name = s.Student?.fullName || "Unknown Student";
-//       const amount = s.amountDue || 0;
-//       return `• ${name}: ₦${amount}`;
-//     }).join("\n")
-//   : "No students are currently owing fees.";
-
-//   // 2️⃣ Prepare static + dynamic info
-//   const instructions = `
-//     You are a school admissions assistant for a Nigerian school.
-//     Answer ONLY using the SCHOOL INFO and PAYMENT DATA below.
-//     If the answer is not in the info, say: 'I’m not sure—please contact the school admin.'
-//     Be short (1-4 lines).
-//   `;
-
-//   const schoolInfo = `
-//     School Name: ${school?.name || ""}
-//     Address: ${school?.address || ""}
-//     Map: ${school?.mapsLink || ""}
-
-//     SCHOOL KNOWLEDGE:
-//     ${school?.aiKnowledge || "No additional info provided."}
-
-//     PAYMENT DATA (students owing fees):
-//     ${owingSummary}
-//   `;
-
-//   const currentState = [
-//     `Current admissionStep: ${conversation?.admissionStep || ""}`,
-//     `Child name: ${conversation?.childName || ""}`,
-//     `Child age: ${conversation?.childAge || ""}`,
-//     `Desired class: ${conversation?.desiredClass || ""}`,
-//     `Invoice status: ${conversation?.invoiceStatus || ""}`,
-//   ].join("\n");
-
-//   try {
-//     const resp = await openai.responses.create({
-//       model,
-//       instructions,
-//       input: `
-// SCHOOL INFO + PAYMENTS:
-// ${schoolInfo}
-
-// CURRENT STATE:
-// ${currentState}
-
-// PARENT MESSAGE:
-// ${question}
-
-// If the message is not a question, reply politely and guide them back to the next required step.
-//       `,
-//     });
-
-//     return (resp.output_text || "").trim() || "I’m not sure—please contact the school admin.";
-//   } catch (e) {
-//     console.log("❌ LLM error:", e?.message || e);
-//     return "I’m not sure—please contact the school admin.";
-//   }
-// }
-// ---------------------
+} catch (e) {
+  console.log("❌ LLM error:", e.message);
+  return "I’m not sure—please contact the school admin.";
+}
+}
 // WhatsApp Cloud send helper
 // ---------------------
 async function sendWhatsAppText(to, message) {
@@ -522,7 +541,7 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
     conversationId: conversation.id,
     direction: "inbound",
     from: normalizedFrom,
-    text,
+    text: String(text),
     providerTimestamp: timestamp ? new Date(timestamp) : null,
   });
 
@@ -530,6 +549,31 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
   await conversation.save();
 
   const cleanText = text.trim().toLowerCase();
+  // =========================
+// HANDLE IMAGE RECEIPT
+// =========================
+if (text.startsWith("[IMAGE RECEIPT]")) {
+
+  console.log("📸 RECEIPT DETECTED");
+
+  // 🔥 Update conversation
+  conversation.awaitingInvoiceDetails = false;
+  conversation.invoiceStatus = "pending_verification";
+
+  await conversation.save();
+
+  const reply = "✅ Payment receipt received. Admin will verify shortly.";
+
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: reply,
+    providerTimestamp: null,
+  });
+
+  return reply;
+}
 
   // ---------------------
   // Global intents (greetings)
@@ -547,7 +591,7 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
       conversationId: conversation.id,
       direction: "outbound",
       from: "agent",
-      text: reply,
+      text: String(reply),
       providerTimestamp: null,
     });
 
@@ -557,15 +601,27 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
   // ---------------------
   // FAQ check
   // ---------------------
+  const isOwingQuery =
+  text.toLowerCase().includes("owing") ||
+  text.toLowerCase().includes("owe") ||
+  text.toLowerCase().includes("debt") ||
+  text.toLowerCase().includes("unpaid") ||
+  text.toLowerCase().includes("paid") ||
+  text.toLowerCase().includes("payment") ||
+  text.toLowerCase().includes("has paid") ||
+  text.toLowerCase().includes("mark as paid");
+
+
   const faqAnswer = matchFaq(text);
-  if (faqAnswer) {
+
+if (faqAnswer && !isOwingQuery) {
     const reply = faqAnswer;
 
     await Message.create({
       conversationId: conversation.id,
       direction: "outbound",
       from: "agent",
-      text: reply,
+      text: String(reply),
       providerTimestamp: null,
     });
 
@@ -581,19 +637,268 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
   const messageLooksLikeClass = /nursery|primary/i.test(cleanText);
   const messageLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanText);
 
-  const offFlow =
-    (expectedStep === "ASK_CHILD_AGE" && !messageLooksLikeAge) ||
-    (expectedStep === "ASK_DESIRED_CLASS" && !messageLooksLikeClass) ||
-    (expectedStep === "EXPECT_EMAIL_OR_SKIP" && !(messageLooksLikeEmail || cleanText === "skip"));
+const offFlow =
+  (expectedStep === "ASK_CHILD_AGE" && !messageLooksLikeAge) ||
+  (expectedStep === "ASK_DESIRED_CLASS" && !messageLooksLikeClass) ||
+  (expectedStep === "EXPECT_EMAIL_OR_SKIP" && !(messageLooksLikeEmail || cleanText === "skip"));
 
-  if (offFlow) {
-    const llmText = await llmFallbackAnswer({
-      school: schoolRecord,
-      question: text,
-      conversation,
+if (offFlow || isOwingQuery) {
+  try {
+    const decision = await aiAgentDecision({
+      message: text,
+      schoolContext: schoolRecord.aiKnowledge
     });
 
-    const reply = `${llmText}\n\n${continuePromptFor(conversation)}`;
+    console.log("🧠 AI DECISION:", decision);
+    // ✅ ADD THIS LINE HERE
+    console.log("🔥 BEFORE TOOL CALL");
+   // ✅ ONLY SAVE MEMORY FOR VALID INTENTS
+if (decision.intent !== "unknown") {
+
+  conversation.lastIntent = decision.intent;
+
+  const newName = decision.parameters?.studentName;
+
+  if (newName && newName.trim() !== "") {
+    conversation.lastStudentName = newName;
+  }
+
+  await conversation.save();
+  await conversation.reload();
+
+  console.log("🧠 SAVED MEMORY:", conversation.lastStudentName);
+
+} else {
+  console.log("⚠️ SKIPPING MEMORY UPDATE (UNKNOWN INTENT)");
+}
+
+  console.log("🧠 SAVED MEMORY:", conversation.lastStudentName);
+
+  const { getOwingStudents, getSchoolInfo, getTotalOutstanding } = require("./services/tools");
+
+    let toolResult = null;
+    let replyText = "I couldn’t find anything.";
+
+    // =========================
+    // GET ALL OWING STUDENTS
+    // =========================
+    if (decision.intent === "get_owing_students") {
+      toolResult = await getOwingStudents({
+        PaymentInstallment,
+        Student,
+        schoolId: schoolRecord.id
+      });
+
+      // ✅ ADD THIS LINE HERE
+    console.log("🔥 AFTER TOOL CALL");
+
+      if (toolResult?.data?.length) {
+       replyText = toolResult.data
+  .map(item => {
+    const rawName = item.name || item.Student?.fullName || "Unknown";
+
+    // Fix name formatting
+    const name = rawName
+      .toLowerCase()
+      .split(" ")
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+
+    const amount = item.amount || item.amountDue || 0;
+
+    // Format money properly
+    const formattedAmount = Number(amount).toLocaleString();
+
+    const code = item.studentCode || "N/A";
+    return `• ${name} (${code}): ₦${formattedAmount}`;
+     })
+      .join("\n");
+      } else {
+        replyText = "No students are currently owing fees.";
+      }
+    }
+
+    // =========================
+    // GET SINGLE STUDENT OWING
+    // =========================
+    else if (decision.intent === "get_student_owing") {
+      const name =
+        decision.parameters?.studentName ||
+        conversation.lastStudentName;
+
+      if (!name) {
+        replyText = "Please tell me the student's name.";
+      } else {
+
+        toolResult = await getOwingStudents({
+          PaymentInstallment,
+          Student,
+          schoolId: schoolRecord.id
+        });
+
+        const match = toolResult.data.find(item => {
+          const studentName =
+            item.name ||
+            item.Student?.fullName ||
+            "";
+
+          return studentName.toLowerCase().includes(name.toLowerCase());
+        });
+
+        if (match) {
+          const studentName =
+            match.name ||
+            match.Student?.fullName ||
+            "Unknown";
+
+          const amount =
+            match.amount ||
+            match.amountDue ||
+            0;
+
+          replyText = `• ${studentName} is owing ₦${amount}`;
+        } else {
+          replyText = "Student not found or not owing.";
+    }
+  }
+}
+
+    // =========================
+    // SCHOOL INFO
+    // =========================
+    else if (decision.intent === "get_school_info") {
+      toolResult = await getSchoolInfo({
+        school: schoolRecord
+      });
+
+      replyText = `${toolResult.data.name}\n${toolResult.data.address}`;
+    }
+
+    // ✅ ADD THIS BLOCK RIGHT HERE
+    else if (decision.intent === "get_total_outstanding") {
+
+      const result = await getTotalOutstanding({
+        PaymentInstallment,
+        schoolId: schoolRecord.id
+      });
+
+      const formatted = Number(result.data).toLocaleString();
+
+      replyText = `Total outstanding fees: ₦${formatted}`;
+    }
+
+    else if (decision.intent === "record_payment") {
+  const name = decision.parameters?.studentName;
+  const amountPaid = Number(decision.parameters?.amount || 0);
+
+  if (!name) {
+    replyText = "Please tell me the student's name.";
+  } else if (!amountPaid || amountPaid <= 0) {
+    replyText = "Please specify how much was paid.";
+  } else {
+
+    const records = await PaymentInstallment.findAll({
+      where: { schoolId: schoolRecord.id, status: "pending" },
+      include: [{ model: Student }],
+      order: [["createdAt", "ASC"]]
+    });
+
+    const studentRecords = records.filter(r =>
+      (r.Student?.fullName || "")
+        .toLowerCase()
+        .includes(name.toLowerCase())
+    );
+
+    if (studentRecords.length === 0) {
+      replyText = "Student not found or no pending payment.";
+    } else {
+
+      let remaining = amountPaid;
+
+      for (const record of studentRecords) {
+        if (remaining <= 0) break;
+
+        const due = record.amountDue || 0;
+
+        if (remaining >= due) {
+          record.status = "paid";
+          remaining -= due;
+        } else {
+          record.amountDue = due - remaining;
+          remaining = 0;
+        }
+
+        await record.save();
+      }
+
+      // ✅ NEW PART (THIS IS THE UPGRADE)
+      const remainingRecords = await PaymentInstallment.findAll({
+        where: { schoolId: schoolRecord.id, status: "pending" },
+        include: [{ model: Student }]
+      });
+
+      const studentRemaining = remainingRecords
+        .filter(r =>
+          (r.Student?.fullName || "")
+            .toLowerCase()
+            .includes(name.toLowerCase())
+        )
+        .reduce((sum, r) => sum + (r.amountDue || 0), 0);
+
+      const formattedPaid = Number(amountPaid).toLocaleString();
+      const formattedRemaining = Number(studentRemaining).toLocaleString();
+
+      replyText = `✅ Payment recorded
+
+${name} paid ₦${formattedPaid}
+Remaining balance: ₦${formattedRemaining}`;
+    }
+  }
+}
+
+    else {
+  // 🔥 MEMORY FALLBACK
+  if (conversation.lastStudentName) {
+
+    toolResult = await getOwingStudents({
+      PaymentInstallment,
+      Student,
+      schoolId: schoolRecord.id
+    });
+
+    const match = toolResult.data.find(item => {
+      const studentName =
+        item.name ||
+        item.Student?.fullName ||
+        "";
+
+      return studentName
+        .toLowerCase()
+        .includes(conversation.lastStudentName.toLowerCase());
+    });
+
+    if (match) {
+      const studentName =
+        match.name ||
+        match.Student?.fullName ||
+        "Unknown";
+
+      const amount =
+        match.amount ||
+        match.amountDue ||
+        0;
+
+      replyText = `• ${studentName} is owing ₦${amount}`;
+    } else {
+      replyText = "Student not found or not owing.";
+    }
+
+  } else {
+    replyText = "I didn’t understand that request.";
+  }
+}
+
+    const reply = String(replyText);
 
     await Message.create({
       conversationId: conversation.id,
@@ -604,7 +909,23 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
     });
 
     return reply;
+
+  } catch (error) {
+    console.error("❌ AI AGENT ERROR:", error);
+
+    const fallbackReply = "Something went wrong. Please try again.";
+
+    await Message.create({
+      conversationId: conversation.id,
+      direction: "outbound",
+      from: "agent",
+      text: fallbackReply,
+      providerTimestamp: null,
+    });
+
+    return fallbackReply;
   }
+}
 
   // ---------------------
   // Post-payment or normal flow
@@ -627,7 +948,7 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
       conversationId: conversation.id,
       direction: "outbound",
       from: "agent",
-      text: replyText,
+      text: String(replyText),
       providerTimestamp: null,
     });
 
@@ -640,7 +961,7 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
     conversationId: conversation.id,
     direction: "outbound",
     from: "agent",
-    text: reply,
+    text: String(reply),
     providerTimestamp: null,
   });
 
@@ -661,6 +982,7 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
   telegramBot.on("text", async (ctx) => {
     try {
       const telegramId = ctx.from.id.toString();
+      console.log("🔥 TELEGRAM ID:", telegramId);
       const text = ctx.message.text;
 
       console.log("✅ Telegram message:", text, "FROM:", telegramId);
@@ -686,18 +1008,59 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
         timestamp: new Date().toISOString(),
       });
 
-      await ctx.reply(replyText);
+      await ctx.reply(
+      typeof replyText === "string"
+    ? replyText
+    : JSON.stringify(replyText, null, 2)
+);
     } catch (err) {
       console.error("❌ Telegram handler error:", err);
     }
   });
+
+  telegramBot.on("photo", async (ctx) => {
+  try {
+    const telegramId = ctx.from.id.toString();
+    console.log("📸 PHOTO RECEIVED FROM:", telegramId);
+
+    const photos = ctx.message.photo;
+    const fileId = photos[photos.length - 1].file_id; // highest quality
+
+    const fileLink = await ctx.telegram.getFileLink(fileId);
+
+    console.log("📸 FILE LINK:", fileLink.href);
+
+    const numberRecord = await WhatsAppNumber.findOne({
+      where: { telegramId },
+    });
+
+    if (!numberRecord) {
+      return ctx.reply("You are not registered with any school.");
+    }
+
+    const schoolId = numberRecord.schoolId;
+
+    // 🔥 Process as message
+    const replyText = await processInboundMessage({
+      channel: "telegram",
+      from: telegramId,
+      schoolId,
+      text: `[IMAGE RECEIPT]: ${fileLink.href}`,
+      timestamp: new Date().toISOString(),
+    });
+
+    await ctx.reply("✅ Receipt received. Admin will verify shortly.");
+
+  } catch (err) {
+    console.error("❌ PHOTO HANDLER ERROR:", err);
+  }
+});
 
   telegramBot.launch();
   console.log("✅ Telegram bot running...");
 } else {
   console.log("⚠️ TELEGRAM_BOT_TOKEN not set. Telegram bot disabled.");
 }
-
 // ---------------------
 // Admin reset all conversations (optional bulk reset)
 // ---------------------
@@ -733,6 +1096,181 @@ app.post("/admin/conversations/reset-all", requireAdminKey, async (req, res) => 
     });
   } catch (error) {
     console.error("Reset all conversations error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 👇👇👇 PASTE RIGHT HERE 👇👇👇
+
+
+// ---------------------
+// Admin: get conversations by school
+// ---------------------
+app.get("/admin/conversations/:schoolId", requireAdminKey, async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+
+    const conversations = await Conversation.findAll({
+      where: { schoolId },
+      include: [{ model: Parent }],
+      order: [["updatedAt", "DESC"]],
+    });
+
+    return res.json({
+      success: true,
+      conversations,
+    });
+
+  } catch (error) {
+    console.error("Fetch conversations error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------
+// Admin: get messages for a conversation
+// ---------------------
+app.get("/admin/conversation/:id/messages", requireAdminKey, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const messages = await Message.findAll({
+      where: { conversationId: id },
+      order: [["createdAt", "ASC"]],
+    });
+
+    return res.json({
+      success: true,
+      messages,
+    });
+
+  } catch (error) {
+    console.error("Fetch messages error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+// ---------------------
+// Admin: reply to parent
+// ---------------------
+app.post("/admin/conversation/:id/reply", requireAdminKey, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: "Message is required" });
+    }
+
+    const conversation = await Conversation.findByPk(id, {
+      include: [Parent],
+    });
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    const parent = conversation.Parent;
+
+    // ✅ Save message
+    const newMessage = await Message.create({
+      conversationId: conversation.id,
+      direction: "outbound",
+      from: "admin",
+      text: message,
+    });
+
+    // ✅ Find contact record
+    const numberRecord = await WhatsAppNumber.findOne({
+    where: {
+    schoolId: conversation.schoolId,
+    telegramId: parent.phone.replace("+", ""), // because you used telegramId as "from"
+  },
+});
+    console.log("📱 NUMBER RECORD:", numberRecord);
+    console.log("📱 PARENT PHONE:", parent.phone);
+
+    // ✅ Send via Telegram
+    if (numberRecord?.telegramId && telegramBot) {
+      await telegramBot.telegram.sendMessage(numberRecord.telegramId, message);
+    }
+
+    // ✅ Send via WhatsApp
+    if (numberRecord?.phoneNumber) {
+      await sendWhatsAppText(numberRecord.phoneNumber, message);
+    }
+
+    return res.json({
+      success: true,
+      message: "Reply sent successfully",
+      data: newMessage,
+    });
+
+  } catch (error) {
+    console.error("Reply error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+
+// ---------------------
+// Admin: mark invoice as sent
+// ---------------------
+app.post("/admin/invoice/:id/mark-sent", async (req, res)=> {
+  try {
+    const { id } = req.params;
+
+    const conversation = await Conversation.findOne({
+    where: { id: Number(id) }
+});
+    console.log("FOUND CONVO:", conversation);
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    conversation.invoiceStatus = "sent";
+    await conversation.save();
+    await conversation.reload();
+
+    console.log("UPDATED STATUS:", conversation.invoiceStatus);
+
+    return res.json({
+      success: true,
+      message: "Marked as sent",
+    });
+
+  } catch (error) {
+    console.error("Mark sent error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------
+// Admin: mark invoice as paid
+// ---------------------
+app.post("/admin/invoice/:id/mark-sent", async (req, res)=> {
+  try {
+    const { id } = req.params;
+
+    const conversation = await Conversation.findOne({
+    where: { id: Number(id) }
+});
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    conversation.invoiceStatus = "paid";
+    await conversation.save();
+
+    return res.json({
+      success: true,
+      message: "Marked as paid",
+    });
+
+  } catch (error) {
+    console.error("Mark paid error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -829,6 +1367,117 @@ app.post("/admin/llm/test", requireAdminKey, async (req, res) => {
   } catch (error) {
     console.error("AI update error:", error);
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------
+// AI Analytics Route
+// ---------------------
+app.post("/admin/analytics", requireAdminKey, async (req, res) => {
+  try {
+    const { question, schoolId } = req.body;
+
+    if (!question || !schoolId) {
+      return res.status(400).json({
+        error: "question and schoolId are required"
+      });
+    }
+
+    let intent = "unknown";
+
+    // 🔥 STEP 1: Try LLM (SAFE VERSION)
+    if (openai) {
+      try {
+        const aiResponse = await openai.chat.completions.create({
+          model: "gpt-5-mini",
+          messages: [
+            {
+              role: "system",
+              content: `
+You are a school analytics classifier.
+
+Classify the user question into ONLY one of:
+- count_paid
+- list_unpaid
+- unknown
+
+Return ONLY the label. No explanation.
+              `
+            },
+            {
+              role: "user",
+              content: question
+            }
+          ],
+          max_completion_tokens: 10
+        });
+
+        intent = aiResponse.choices[0].message.content.trim().toLowerCase();
+        console.log("🧠 INTENT:", intent);
+
+      } catch (err) {
+        console.log("⚠️ LLM failed, fallback used:", err.message);
+      }
+    }
+
+    // 🔥 STEP 2: FALLBACK (VERY IMPORTANT)
+    if (!intent || intent === "unknown") {
+      const q = question.toLowerCase();
+
+      if (q.includes("how many") && q.includes("paid")) {
+        intent = "count_paid";
+      }
+
+      if (q.includes("who") && (q.includes("not paid") || q.includes("owing"))) {
+        intent = "list_unpaid";
+      }
+    }
+
+    // 🔥 STEP 3: HANDLE INTENT
+
+    // COUNT PAID
+    if (intent.includes("count_paid")) {
+      const count = await Conversation.count({
+        where: {
+          schoolId,
+          invoiceStatus: "paid"
+        }
+      });
+
+      return res.json({
+        answer: `${count} parents have paid`
+      });
+    }
+
+    // LIST UNPAID
+    if (intent.includes("list_unpaid")) {
+      const list = await Conversation.findAll({
+        where: {
+          schoolId,
+          invoiceStatus: "sent"
+        },
+        include: [Parent]
+      });
+
+      const names = list.map(c => c.Parent?.phone || "Unknown");
+
+      return res.json({
+        answer: names.length
+          ? `Unpaid parents: ${names.join(", ")}`
+          : "All parents have paid"
+      });
+    }
+
+    // DEFAULT
+    return res.json({
+      answer: "I don’t understand that yet."
+    });
+
+  } catch (error) {
+    console.error("❌ Analytics error:", error);
+    return res.status(500).json({
+      error: error.message
+    });
   }
 });
 // ---------------------
@@ -969,20 +1618,32 @@ app.post("/test/llm", async (req, res) => {
   }
 });
 
-const axios = require("axios");
+// const axios = require("axios");
+
+
+const { getOwingStudents } = require("./services/tools");
+
+app.get("/test-tools", async (req, res) => {
+  const result = await getOwingStudents({
+    PaymentInstallment,
+    Student,
+    schoolId: 1 // use real schoolId in your DB
+  });
+
+  res.json(result);
+});
 
 app.get("/test-ai", async (req, res) => {
   try {
-    const response = await axios.post("http://127.0.0.1:8000/ask", {
-      school_name: "Test School",
-      knowledge: "We offer nursery and primary education",
-      question: "What classes do you offer?"
+    const result = await aiAgentDecision({
+      message: "How much is John Doe owing?",
+      schoolContext: "This is a private secondary school in Lagos"
     });
 
-    res.json(response.data);
+    res.json(result);
   } catch (error) {
-    console.error("❌ AI TEST ERROR:", error.message);
-    res.status(500).json({ error: "Failed to reach AI service" });
+    console.error("❌ AI AGENT TEST ERROR:", error.message);
+    res.status(500).json({ error: "AI agent failed" });
   }
 });
 // ---------------------
@@ -990,6 +1651,43 @@ app.get("/test-ai", async (req, res) => {
 // ---------------------
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on http://localhost:${PORT}`);
+sequelize.sync()
+  .then(() => {
+    console.log("✅ Database synced");
+  })
+  .catch((err) => {
+    console.error("❌ DB sync error:", err);
+  });
+
+  app.get("/fix-telegram", async (req, res) => {
+  try {
+    const record = await WhatsAppNumber.create({
+      schoolId: 1, // use your real schoolId if not 1
+      telegramId: "1079483102",
+      phoneNumber: "+2348137137336"
+    });
+
+    res.json({ success: true, record });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
 });
+
+// app.listen(PORT, () => {
+//   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+// });
+app.listen(PORT, async () => {
+  console.log(`🚀 Server is running on http://localhost:${PORT}`);
+
+  // 🔥 TEMP DEBUG START
+  const [result] = await sequelize.query(`
+    SELECT column_name 
+    FROM information_schema.columns 
+    WHERE table_name = 'students'
+  `);
+
+  console.log("🔥 DB COLUMNS:", result);
+  // 🔥 TEMP DEBUG END
+});
+

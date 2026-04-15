@@ -32,6 +32,13 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
+
+      studentCode: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+        field: "studentCode", // ✅ ADD THIS LINE
+      },
     },
     {
       tableName: "students",

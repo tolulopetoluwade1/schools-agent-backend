@@ -19,7 +19,7 @@ module.exports = (sequelize, DataTypes) => {
       },
 
       channel: {
-        type: DataTypes.ENUM("whatsapp", "web"),
+        type: DataTypes.ENUM("whatsapp", "telegram"),
         allowNull: false,
       },
 
