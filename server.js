@@ -1,7 +1,9 @@
 // =====================
 // server.js (Telegram-ready, Chunk 1)
 // =====================
-require("dotenv").config();
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
 console.log("DB URL:", process.env.DATABASE_URL);
 console.log("ADMIN KEY:", process.env.ADMIN_API_KEY);
 const cors = require("cors");
