@@ -17,6 +17,7 @@ const cron = require("node-cron");
 const updateAiKnowledge = require("./services/aiKnowledgeUpdater");
 const aiAgentDecision = require("./aiAgent");
 
+
 // ---------------------
 // App init
 // ---------------------
@@ -99,6 +100,7 @@ const StudentModel = require("./models/Student");
 const PaymentModel = require("./models/Payment");
 const PaymentInstallmentModel = require("./models/PaymentInstallment");
 const startInstallmentReminder = require("./services/installmentReminderService");
+const AdminModel = require("./models/Admin");
 
 const School = SchoolModel(sequelize, DataTypes);
 const schoolRoutes = require("./routes/schoolRoutes")(School);
@@ -109,7 +111,9 @@ const Message = MessageModel(sequelize, DataTypes);
 const Student = StudentModel(sequelize, DataTypes);
 const Payment = PaymentModel(sequelize, DataTypes);
 const PaymentInstallment = PaymentInstallmentModel(sequelize, DataTypes);
+const Admin = AdminModel(sequelize, DataTypes);
 
+console.log("Admin model loaded:", !!Admin);
 // Payment Installment routes
 const PaymentInstallmentRoutes = require("./routes/paymentInstallmentRoutes")(PaymentInstallment);
 app.use("/api/installments", PaymentInstallmentRoutes);
@@ -230,14 +234,13 @@ function extractDesiredClass(rawText) {
 }
 
 function looksLikeFeeQuestion(text) {
-  const t = (text || "").toLowerCase();
+  const t = text.toLowerCase();
+
   return (
-    t.includes("fee") ||
-    t.includes("school fee") ||
-    t.includes("tuition") ||
-    t.includes("how much") ||
-    t.includes("price") ||
-    t.includes("cost")
+    t.includes("how much is school fees") ||
+    t.includes("what is the school fee") ||
+    t.includes("school fees for") ||
+    t.includes("tuition for")
   );
 }
 
@@ -539,6 +542,19 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
     },
   });
 
+  // 🔥 MAKE YOU ADMIN (ADD THIS)
+  if (from === "1079483102") {
+  conversation.role = "admin";
+
+  // 🚨 CLEAR ANY STUCK FLOW
+  conversation.lastIntent = null;
+  conversation.admissionStep = null;
+
+  await conversation.save();
+  }
+  // 🔍 DEBUG ROLE (ADD THIS)
+console.log("ROLE FIELD:", conversation.role);
+
   await Message.create({
     conversationId: conversation.id,
     direction: "inbound",
@@ -552,6 +568,41 @@ async function processInboundMessage({ channel, from, schoolId, text, timestamp 
 
   const cleanText = text.trim().toLowerCase();
   // =========================
+// 🚨 FORCE CLASS → FEE RESPONSE (OVERRIDE EVERYTHING)
+// =========================
+const forcedClass = extractDesiredClass(text);
+
+if (forcedClass) {
+  const fee = getFeeForClass(forcedClass);
+
+  const reply = `Tuition for ${forcedClass} is ₦${fee.toLocaleString()}.`;
+
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: reply,
+  });
+
+  return reply; // 🚨 HARD STOP
+}
+
+  // =========================
+// 🎯 PRIORITY: FEE FLOW FIX
+// =========================
+
+// Detect fee question
+if (looksLikeFeeQuestion(cleanText)) {
+  conversation.lastIntent = "fee_question";
+  await conversation.save();
+}
+
+// =========================
+// 🚨 HARD STOP: FEE FLOW (FINAL FIX)
+// =========================
+
+
+ // =========================
 // HANDLE IMAGE RECEIPT
 // =========================
 if (text.startsWith("[IMAGE RECEIPT]")) {
@@ -617,18 +668,25 @@ if (text.startsWith("[IMAGE RECEIPT]")) {
   const faqAnswer = matchFaq(text);
 
 if (faqAnswer && !isOwingQuery) {
-    const reply = faqAnswer;
 
-    await Message.create({
-      conversationId: conversation.id,
-      direction: "outbound",
-      from: "agent",
-      text: String(reply),
-      providerTimestamp: null,
-    });
-
-    return reply;
+  // 🎯 If it's a fee-related question → trigger fee flow
+  if (looksLikeFeeQuestion(cleanText)) {
+    conversation.lastIntent = "fee_question";
+    await conversation.save();
   }
+
+  const reply = faqAnswer.answer || faqAnswer;
+
+  await Message.create({
+    conversationId: conversation.id,
+    direction: "outbound",
+    from: "agent",
+    text: String(reply),
+    providerTimestamp: null,
+  });
+
+  return reply;
+}
 
   // ---------------------
   // LLM fallback for off-flow messages
@@ -639,12 +697,13 @@ if (faqAnswer && !isOwingQuery) {
   const messageLooksLikeClass = /nursery|primary/i.test(cleanText);
   const messageLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanText);
 
+
 const offFlow =
   (expectedStep === "ASK_CHILD_AGE" && !messageLooksLikeAge) ||
   (expectedStep === "ASK_DESIRED_CLASS" && !messageLooksLikeClass) ||
   (expectedStep === "EXPECT_EMAIL_OR_SKIP" && !(messageLooksLikeEmail || cleanText === "skip"));
 
-if (offFlow || isOwingQuery) {
+if ((offFlow || isOwingQuery) && conversation.lastIntent !== "fee_question") {
   try {
     const decision = await aiAgentDecision({
       message: text,
@@ -957,6 +1016,11 @@ Remaining balance: ₦${formattedRemaining}`;
     return replyText;
   }
 
+
+// 🚨 FIX: Only apply fee flow to parents
+if (conversation.lastIntent === "fee_question" && conversation.role !== "admin") {
+  return "Please tell me the class (e.g., Nursery 2, Primary 3).";
+}
   const reply = continuePromptFor(conversation);
 
   await Message.create({
@@ -981,11 +1045,68 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
 
   console.log("✅ Telegram bot initialized");
 
+  telegramBot.start(async (ctx) => {
+  try {
+    const telegramId = ctx.from.id.toString();
+
+    // 🔥 GET PAYLOAD (school_1)
+    const payload = ctx.startPayload;
+
+    if (!payload || !payload.startsWith("school_")) {
+      return ctx.reply("Invalid access link. Please contact the school.");
+    }
+
+    const schoolId = payload.split("_")[1];
+
+    console.log("🚀 NEW USER FROM SCHOOL:", schoolId);
+
+    // 🔥 SAVE USER IF NOT EXISTS
+    await WhatsAppNumber.findOrCreate({
+      where: { telegramId },
+      defaults: {
+        telegramId,
+        schoolId,
+      },
+    });
+
+    await ctx.reply(`
+✅ Welcome to EduCore AI
+
+    In order to serve you well, please choose an option:
+
+    1. Admission
+    2. Check Fees / Payments
+    3. Send Payment Receipt
+    4. Ask a Question
+    `);
+
+  } catch (err) {
+    console.error("❌ START HANDLER ERROR:", err);
+  }
+});
+
   telegramBot.on("text", async (ctx) => {
     try {
       const telegramId = ctx.from.id.toString();
       console.log("🔥 TELEGRAM ID:", telegramId);
       const text = ctx.message.text;
+      
+      // 🎯 HANDLE MENU OPTIONS FIRST
+    if (text === "1") {
+      return ctx.reply("To continue admission, please tell me your child's full name.");
+    }
+
+    if (text === "2") {
+      return ctx.reply("Please ask your question about fees or payments.");
+    }
+
+    if (text === "3") {
+      return ctx.reply("Please upload your payment receipt.");
+    }
+
+    if (text === "4") {
+      return ctx.reply("Please type your question.");
+    }
 
       console.log("✅ Telegram message:", text, "FROM:", telegramId);
 
@@ -993,10 +1114,49 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
         where: { telegramId },
       });
 
+      // 🚨 BLOCK SENSITIVE QUESTIONS FROM PARENTS
+const lowerText = text.toLowerCase();
+
+// 🚨 ROLE-AWARE SECURITY (FIXED)
+if (
+  lowerText.includes("who is owing") ||
+  lowerText.includes("who has not paid") ||
+  lowerText.includes("list of debtors") ||
+  lowerText.includes("who is in debt") ||
+  lowerText.includes("who has paid") ||
+  lowerText.includes("total outstanding") ||
+  lowerText.includes("list unpaid")
+) {
+  const numberRecord = await WhatsAppNumber.findOne({
+    where: { telegramId },
+  });
+
+  if (!numberRecord) {
+    return ctx.reply("Please register first.");
+  }
+
+  const parent = await Parent.findOne({
+    where: { phone: `+${telegramId}` },
+  });
+
+  const conversation = await Conversation.findOne({
+    where: {
+      schoolId: numberRecord.schoolId,
+      parentId: parent?.id,
+      channel: "telegram",
+    },
+  });
+
+  if (!conversation || conversation.role !== "admin") {
+    return ctx.reply(
+      "For privacy reasons, this information is only available to the school administration."
+    );
+  }
+}
+
       if (!numberRecord) {
-        console.log("❌ Telegram user not recognized:", telegramId);
         return ctx.reply(
-          "Hello! Your Telegram account is not registered with any school. Please contact admin."
+          "Please use the school link to start: https://t.me/YourBot?start=school_1"
         );
       }
 
@@ -1010,11 +1170,11 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
         timestamp: new Date().toISOString(),
       });
 
-      await ctx.reply(
-      typeof replyText === "string"
-    ? replyText
-    : JSON.stringify(replyText, null, 2)
-);
+        await ctx.reply(
+        typeof replyText === "object" && replyText.answer
+          ? replyText.answer
+          : replyText
+      );
     } catch (err) {
       console.error("❌ Telegram handler error:", err);
     }
@@ -1521,6 +1681,10 @@ app.post("/admin/installments/remind", requireAdminKey, async (req, res) => {
     return res.status(500).json({ success: false, error: error.message });
   }
 });
+// Public health check (for UptimeRobot)
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
 // ---------------------
 // Health endpoint: full status (internal)
 // ---------------------
@@ -1653,9 +1817,17 @@ app.get("/test-ai", async (req, res) => {
 // ---------------------
 const PORT = process.env.PORT || 5000;
 
-sequelize.sync()
-  .then(() => {
+sequelize.sync( )
+  .then(async () => {
     console.log("✅ Database synced");
+
+    const [columns] = await sequelize.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'conversations'
+    `);
+
+    console.log("🔥 CONVERSATION COLUMNS:", columns);
   })
   .catch((err) => {
     console.error("❌ DB sync error:", err);

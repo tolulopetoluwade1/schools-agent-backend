@@ -29,6 +29,12 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: "open",
       },
 
+      role: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: "parent",
+      },
+
       lastMessageAt: {
         type: DataTypes.DATE,
         allowNull: true,
